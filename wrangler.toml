@@ -1,0 +1,16 @@
+name = "multimodal-ai-app"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "multimodal-memory"
+
+# Update bucket name to match your actual bucket
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "multimodalai"  # ← Changed from "multimodal-uploads"
+preview_bucket_name = "multimodalai"
