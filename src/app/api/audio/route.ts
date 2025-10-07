@@ -69,80 +69,77 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // STEP 2: Check audio size before transcribing
-        const maxAudioSize = 5 * 1024 * 1024; // 2MB limit for Whisper
+        // STEP 2: Convert audio to base64 for transcription
         let transcript = '';
         let answer = '';
 
-        if (audio.size > maxAudioSize) {
-            console.log(`⚠️ Audio too large (${(audio.size / 1024 / 1024).toFixed(2)}MB > 2MB), skipping transcription...`);
-            transcript = `[Audio file uploaded to R2 successfully, but transcription was skipped because the file size (${(audio.size / 1024 / 1024).toFixed(2)}MB) exceeds the 2MB limit. Please use a smaller audio file for transcription.]`;
+        console.log('🔄 Converting audio to base64...');
+        const arrayBuffer = await audio.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
 
-            if (question) {
-                answer = `The audio file was uploaded to R2 successfully at: ${audioUrl}\n\nHowever, it's too large for automatic transcription (${(audio.size / 1024 / 1024).toFixed(2)}MB > 2MB limit). Please use an audio file smaller than 2MB for transcription.`;
+        // Convert to base64
+        let binary = '';
+        for (let i = 0; i < uint8Array.length; i++) {
+            binary += String.fromCharCode(uint8Array[i]);
+        }
+        const base64 = btoa(binary);
+
+        console.log('✅ Audio converted:', {
+            originalSize: audio.size,
+            base64Length: base64.length,
+        });
+
+        // STEP 3: Transcribe audio with Whisper (no size check)
+        console.log('🎙️ Transcribing audio with Whisper...');
+        const ai = new CloudflareAI(accountId, apiToken);
+
+        try {
+            const transcriptionResponse = await ai.transcribeAudio(base64);
+            transcript = transcriptionResponse.text || '';
+
+            if (!transcript) {
+                throw new Error('Whisper returned empty transcription');
             }
-        } else {
-            // STEP 2: Convert audio to base64 for transcription
-            console.log('🔄 Converting audio to base64...');
-            const arrayBuffer = await audio.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
 
-            // Convert to base64
-            let binary = '';
-            for (let i = 0; i < uint8Array.length; i++) {
-                binary += String.fromCharCode(uint8Array[i]);
-            }
-            const base64 = btoa(binary);
-
-            console.log('✅ Audio converted:', {
-                originalSize: audio.size,
-                base64Length: base64.length,
+            console.log('✅ Transcription complete:', {
+                transcriptLength: transcript.length,
+                preview: transcript.substring(0, 100),
             });
+        } catch (transcribeError) {
+            console.error('❌ Transcription failed:', transcribeError);
 
-            // STEP 3: Transcribe audio
-            console.log('🎙️ Transcribing audio with Whisper...');
-            const ai = new CloudflareAI(accountId, apiToken);
+            // Check if it's a size error from Whisper API
+            const errorMessage = transcribeError instanceof Error ? transcribeError.message : String(transcribeError);
 
+            if (errorMessage.includes('too large') || errorMessage.includes('Payload Too Large')) {
+                transcript = `Audio file is too large for Whisper API. The file was uploaded to R2 storage successfully, but transcription is not available. Please use a smaller file (under 2MB) or shorter recording for transcription.`;
+            } else {
+                transcript = `Transcription failed: ${errorMessage}. The audio file was uploaded successfully to R2 storage.`;
+            }
+        }
+
+        // STEP 4: Answer question if provided
+        if (question && transcript && !transcript.includes('failed') && !transcript.includes('too large')) {
+            console.log('💬 Answering question based on transcript...');
             try {
-                const transcriptionResponse = await ai.transcribeAudio(base64);
-                transcript = transcriptionResponse.text || '';
-
-                if (!transcript) {
-                    throw new Error('Whisper returned empty transcription');
-                }
-
-                console.log('✅ Transcription complete:', {
-                    transcriptLength: transcript.length,
-                    preview: transcript.substring(0, 100),
-                });
-            } catch (transcribeError) {
-                console.error('❌ Transcription failed:', transcribeError);
-                transcript = 'Transcription failed. Please try a different audio format or smaller file.';
+                const chatResponse = await ai.chat([
+                    {
+                        role: 'system',
+                        content: 'You are analyzing an audio transcription. Answer questions based on the transcript accurately and concisely.',
+                    },
+                    {
+                        role: 'user',
+                        content: `Transcript: ${transcript}\n\nQuestion: ${question}`,
+                    },
+                ]);
+                answer = chatResponse.response || chatResponse.result?.response || 'No answer generated';
+                console.log('✅ Answer generated');
+            } catch (answerError) {
+                console.error('❌ Failed to generate answer:', answerError);
+                answer = 'Failed to generate answer based on transcript';
             }
-
-            // STEP 4: Answer question if provided
-            if (question && transcript && !transcript.includes('failed') && !transcript.includes('skipped')) {
-                console.log('💬 Answering question based on transcript...');
-                try {
-                    const chatResponse = await ai.chat([
-                        {
-                            role: 'system',
-                            content: 'You are analyzing an audio transcription. Answer questions based on the transcript accurately and concisely.',
-                        },
-                        {
-                            role: 'user',
-                            content: `Transcript: ${transcript}\n\nQuestion: ${question}`,
-                        },
-                    ]);
-                    answer = chatResponse.response || chatResponse.result?.response || 'No answer generated';
-                    console.log('✅ Answer generated');
-                } catch (answerError) {
-                    console.error('❌ Failed to generate answer:', answerError);
-                    answer = 'Failed to generate answer based on transcript';
-                }
-            } else if (question && (transcript.includes('failed') || transcript.includes('skipped'))) {
-                answer = 'Cannot answer question because transcription was skipped or failed.';
-            }
+        } else if (question && (transcript.includes('failed') || transcript.includes('too large'))) {
+            answer = 'Cannot answer question because transcription failed. However, the audio file was uploaded to R2 storage successfully.';
         }
 
         // STEP 5: Store in memory if requested
@@ -153,7 +150,7 @@ export async function POST(request: NextRequest) {
 
                 const content = question
                     ? `Audio Analysis - Q: ${question} A: ${answer}`
-                    : `Audio Transcription: ${transcript}`;
+                    : `Audio Upload: ${audio.name} - ${transcript}`;
 
                 await rag.storeMemory(content, 'audio', {
                     transcript,
@@ -180,7 +177,7 @@ export async function POST(request: NextRequest) {
             audioUrl,
             memorySaved: saveToMemory && !!transcript,
             fileSizeMB: (audio.size / 1024 / 1024).toFixed(2),
-            transcriptionSkipped: audio.size > maxAudioSize,
+            transcriptionSkipped: false,
         });
     } catch (error) {
         console.error('❌ Audio API error:', error);

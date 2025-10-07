@@ -1,26 +1,30 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { Mic, Upload, Loader2, Play, StopCircle } from 'lucide-react';
+import { useState, useRef, ChangeEvent } from 'react';
+import { Mic, Upload, Loader2, Play, StopCircle, X, RefreshCw } from 'lucide-react';
+import type { AudioAnalysisResponse, APIError } from '@/types';
 
 export default function AudioUpload() {
     const [audio, setAudio] = useState<File | null>(null);
     const [preview, setPreview] = useState<string>('');
-    const [question, setQuestion] = useState('');
-    const [transcript, setTranscript] = useState('');
-    const [answer, setAnswer] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [isRecording, setIsRecording] = useState(false);
-    const [recordingTime, setRecordingTime] = useState(0);
-    const [saveToMemory, setSaveToMemory] = useState(true);
+    const [question, setQuestion] = useState<string>('');
+    const [transcript, setTranscript] = useState<string>('');
+    const [answer, setAnswer] = useState<string>('');
+    const [loading, setLoading] = useState<boolean>(false);
+    const [isRecording, setIsRecording] = useState<boolean>(false);
+    const [recordingTime, setRecordingTime] = useState<number>(0);
+    const [saveToMemory, setSaveToMemory] = useState<boolean>(true);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-    const handleAudioChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleAudioChange = (e: ChangeEvent<HTMLInputElement>): void => {
         const file = e.target.files?.[0];
         if (file) {
+            if (preview) {
+                URL.revokeObjectURL(preview);
+            }
             setAudio(file);
             const url = URL.createObjectURL(file);
             setPreview(url);
@@ -29,7 +33,16 @@ export default function AudioUpload() {
         }
     };
 
-    // Helper function to convert audio to WAV format
+    const handleRemoveAudio = (): void => {
+        if (preview) {
+            URL.revokeObjectURL(preview);
+        }
+        setAudio(null);
+        setPreview('');
+        setTranscript('');
+        setAnswer('');
+    };
+
     const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
         const length = buffer.length * buffer.numberOfChannels * 2 + 44;
         const arrayBuffer = new ArrayBuffer(length);
@@ -38,32 +51,29 @@ export default function AudioUpload() {
         let offset = 0;
         let pos = 0;
 
-        // Helper functions
-        const setUint16 = (data: number) => {
+        const setUint16 = (data: number): void => {
             view.setUint16(pos, data, true);
             pos += 2;
         };
-        const setUint32 = (data: number) => {
+        const setUint32 = (data: number): void => {
             view.setUint32(pos, data, true);
             pos += 4;
         };
 
-        // Write WAV header
-        setUint32(0x46464952); // "RIFF"
-        setUint32(length - 8); // file length - 8
-        setUint32(0x45564157); // "WAVE"
-        setUint32(0x20746d66); // "fmt " chunk
-        setUint32(16); // length = 16
-        setUint16(1); // PCM (uncompressed)
+        setUint32(0x46464952);
+        setUint32(length - 8);
+        setUint32(0x45564157);
+        setUint32(0x20746d66);
+        setUint32(16);
+        setUint16(1);
         setUint16(buffer.numberOfChannels);
         setUint32(buffer.sampleRate);
-        setUint32(buffer.sampleRate * 2 * buffer.numberOfChannels); // avg. bytes/sec
-        setUint16(buffer.numberOfChannels * 2); // block-align
-        setUint16(16); // 16-bit
-        setUint32(0x61746164); // "data" - chunk
-        setUint32(length - pos - 4); // chunk length
+        setUint32(buffer.sampleRate * 2 * buffer.numberOfChannels);
+        setUint16(buffer.numberOfChannels * 2);
+        setUint16(16);
+        setUint32(0x61746164);
+        setUint32(length - pos - 4);
 
-        // Write interleaved data
         for (let i = 0; i < buffer.numberOfChannels; i++) {
             channels.push(buffer.getChannelData(i));
         }
@@ -81,7 +91,6 @@ export default function AudioUpload() {
         return arrayBuffer;
     };
 
-    // Convert WebM to WAV
     const convertToWav = async (audioBlob: Blob): Promise<Blob> => {
         try {
             console.log('Converting audio to WAV format...');
@@ -89,21 +98,19 @@ export default function AudioUpload() {
             const arrayBuffer = await audioBlob.arrayBuffer();
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
-            // Create WAV file
             const wavBuffer = audioBufferToWav(audioBuffer);
             console.log('✅ Converted to WAV');
             return new Blob([wavBuffer], { type: 'audio/wav' });
         } catch (error) {
             console.error('❌ WAV conversion failed:', error);
-            return audioBlob; // Return original if conversion fails
+            return audioBlob;
         }
     };
 
-    const startRecording = async () => {
+    const startRecording = async (): Promise<void> => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // Try different formats in order of preference
             let mimeType = 'audio/webm';
             if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
                 mimeType = 'audio/webm;codecs=opus';
@@ -115,7 +122,7 @@ export default function AudioUpload() {
             mediaRecorderRef.current = mediaRecorder;
             chunksRef.current = [];
 
-            mediaRecorder.ondataavailable = (e) => {
+            mediaRecorder.ondataavailable = (e: BlobEvent) => {
                 if (e.data.size > 0) {
                     chunksRef.current.push(e.data);
                 }
@@ -125,7 +132,6 @@ export default function AudioUpload() {
                 console.log('Recording stopped, processing...');
                 const webmBlob = new Blob(chunksRef.current, { type: mimeType });
 
-                // Convert to WAV for better compatibility with Whisper
                 const wavBlob = await convertToWav(webmBlob);
 
                 const file = new File([wavBlob], 'recording.wav', { type: 'audio/wav' });
@@ -154,7 +160,7 @@ export default function AudioUpload() {
         }
     };
 
-    const stopRecording = () => {
+    const stopRecording = (): void => {
         if (mediaRecorderRef.current && isRecording) {
             mediaRecorderRef.current.stop();
             setIsRecording(false);
@@ -166,7 +172,7 @@ export default function AudioUpload() {
         }
     };
 
-    const handleAnalyze = async () => {
+    const handleAnalyze = async (): Promise<void> => {
         if (!audio) {
             alert('Please upload or record audio');
             return;
@@ -193,11 +199,11 @@ export default function AudioUpload() {
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
+                const errorData: APIError = await response.json();
                 throw new Error(errorData.error || 'Failed to analyze audio');
             }
 
-            const data = await response.json();
+            const data: AudioAnalysisResponse = await response.json();
             setTranscript(data.transcript || 'No transcription available');
             setAnswer(data.answer || 'No answer generated');
         } catch (error) {
@@ -208,19 +214,13 @@ export default function AudioUpload() {
         }
     };
 
-    const handleClear = () => {
-        if (preview) {
-            URL.revokeObjectURL(preview);
-        }
-        setAudio(null);
-        setPreview('');
+    const handleClear = (): void => {
+        handleRemoveAudio();
         setQuestion('');
-        setTranscript('');
-        setAnswer('');
         setRecordingTime(0);
     };
 
-    const formatTime = (seconds: number) => {
+    const formatTime = (seconds: number): string => {
         const mins = Math.floor(seconds / 60);
         const secs = seconds % 60;
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
@@ -283,31 +283,63 @@ export default function AudioUpload() {
                             htmlFor="audio-upload"
                             className="flex items-center justify-center w-full p-8 border-2 border-dashed border-slate-600 rounded-xl hover:border-green-500 transition-colors cursor-pointer bg-slate-700/30"
                         >
-                            {preview ? (
-                                <div className="w-full">
-                                    <audio src={preview} controls className="w-full" />
-                                    <p className="text-center text-slate-300 mt-3">{audio?.name}</p>
-                                    <p className="text-center text-slate-500 text-sm mt-1">
-                                        Size: {((audio?.size || 0) / 1024 / 1024).toFixed(2)}MB
-                                    </p>
-                                </div>
-                            ) : (
-                                <div className="text-center">
-                                    <Upload className="w-12 h-12 mx-auto mb-3 text-slate-400" />
-                                    <p className="text-slate-300">Click to upload audio file</p>
-                                    <p className="text-sm text-slate-500 mt-1">MP3, WAV, M4A up to 2MB for transcription</p>
-                                </div>
-                            )}
+                            <div className="text-center">
+                                <Upload className="w-12 h-12 mx-auto mb-3 text-slate-400" />
+                                <p className="text-slate-300">Click to upload audio file</p>
+                                <p className="text-sm text-slate-500 mt-1">MP3, WAV, M4A up to 5MB for transcription</p>
+                            </div>
                         </label>
                     </div>
                 </div>
+
+                {/* Uploaded Files Section */}
+                {audio && (
+                    <div className="p-4 bg-slate-700/50 rounded-xl border border-slate-600">
+                        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                            <Mic className="w-4 h-4" />
+                            Uploaded Audio
+                        </h3>
+                        <div className="flex items-start gap-4 p-3 bg-slate-800/50 rounded-lg">
+                            {/* Audio Player */}
+                            <div className="w-48">
+                                <audio src={preview} controls className="w-full h-10" />
+                            </div>
+
+                            {/* File Info */}
+                            <div className="flex-1 min-w-0">
+                                <p className="text-white font-medium truncate">{audio.name}</p>
+                                <p className="text-slate-400 text-sm">
+                                    {((audio.size || 0) / 1024 / 1024).toFixed(2)} MB • {audio.type}
+                                </p>
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex gap-2">
+                                <label
+                                    htmlFor="audio-upload"
+                                    className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium cursor-pointer flex items-center gap-2 transition-colors"
+                                >
+                                    <RefreshCw className="w-4 h-4" />
+                                    Replace
+                                </label>
+                                <button
+                                    onClick={handleRemoveAudio}
+                                    className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+                                >
+                                    <X className="w-4 h-4" />
+                                    Remove
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Question Input */}
                 <div>
                     <label className="block mb-3 font-semibold text-white">Ask a Question</label>
                     <textarea
                         value={question}
-                        onChange={(e) => setQuestion(e.target.value)}
+                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setQuestion(e.target.value)}
                         placeholder="What is being discussed in this audio?"
                         rows={3}
                         className="w-full p-4 bg-slate-700 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-400 resize-none"
@@ -320,7 +352,7 @@ export default function AudioUpload() {
                         type="checkbox"
                         id="save-audio-memory"
                         checked={saveToMemory}
-                        onChange={(e) => setSaveToMemory(e.target.checked)}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSaveToMemory(e.target.checked)}
                         className="w-4 h-4 text-green-600 rounded focus:ring-green-500"
                     />
                     <label htmlFor="save-audio-memory" className="text-slate-300 cursor-pointer">

@@ -1,17 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, ChangeEvent } from 'react';
 import { Image as ImageIcon, Upload, Loader2, Play, X, RefreshCw } from 'lucide-react';
+import type { ImageAnalysisResponse, APIError } from '@/types';
 
 export default function ImageUpload() {
     const [image, setImage] = useState<File | null>(null);
     const [preview, setPreview] = useState<string>('');
-    const [question, setQuestion] = useState('');
-    const [answer, setAnswer] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [saveToMemory, setSaveToMemory] = useState(true);
+    const [question, setQuestion] = useState<string>('');
+    const [answer, setAnswer] = useState<string>('');
+    const [loading, setLoading] = useState<boolean>(false);
+    const [saveToMemory, setSaveToMemory] = useState<boolean>(true);
 
-    const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImageChange = (e: ChangeEvent<HTMLInputElement>): void => {
         const file = e.target.files?.[0];
         if (file) {
             if (preview) {
@@ -24,7 +25,7 @@ export default function ImageUpload() {
         }
     };
 
-    const handleRemoveImage = () => {
+    const handleRemoveImage = (): void => {
         if (preview) {
             URL.revokeObjectURL(preview);
         }
@@ -33,7 +34,7 @@ export default function ImageUpload() {
         setAnswer('');
     };
 
-    const handleAnalyze = async () => {
+    const handleAnalyze = async (): Promise<void> => {
         if (!image) {
             alert('Please upload an image');
             return;
@@ -59,11 +60,11 @@ export default function ImageUpload() {
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
+                const errorData: APIError = await response.json();
                 throw new Error(errorData.error || 'Failed to analyze image');
             }
 
-            const data = await response.json();
+            const data: ImageAnalysisResponse = await response.json();
             setAnswer(data.response || 'No response received');
         } catch (error) {
             console.error('Error:', error);
@@ -73,7 +74,7 @@ export default function ImageUpload() {
         }
     };
 
-    const handleClear = () => {
+    const handleClear = (): void => {
         handleRemoveImage();
         setQuestion('');
         setAnswer('');
@@ -160,7 +161,7 @@ export default function ImageUpload() {
                     <label className="block mb-3 font-semibold text-white">Ask a Question</label>
                     <textarea
                         value={question}
-                        onChange={(e) => setQuestion(e.target.value)}
+                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setQuestion(e.target.value)}
                         placeholder="What do you see in this image?"
                         rows={3}
                         className="w-full p-4 bg-slate-700 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-400 resize-none"
@@ -173,7 +174,7 @@ export default function ImageUpload() {
                         type="checkbox"
                         id="save-image-memory"
                         checked={saveToMemory}
-                        onChange={(e) => setSaveToMemory(e.target.checked)}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSaveToMemory(e.target.checked)}
                         className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
                     />
                     <label htmlFor="save-image-memory" className="text-slate-300 cursor-pointer">

@@ -1,18 +1,14 @@
-export interface VectorPoint {
-    id: string;
-    values: number[];
-    metadata: {
-        content: string;
-        timestamp: number;
-        type: 'text' | 'image' | 'video' | 'audio';
-        [key: string]: any;
-    };
-}
-
-export interface SearchResult {
+export interface VectorMatch {
     id: string;
     score: number;
-    metadata: VectorPoint['metadata'];
+    values?: number[];
+    metadata: Record<string, any>;
+}
+
+export interface VectorInsert {
+    id: string;
+    values: number[];
+    metadata?: Record<string, any>;
 }
 
 export class VectorizeService {
@@ -26,174 +22,147 @@ export class VectorizeService {
         this.indexName = indexName;
     }
 
-    async insert(points: VectorPoint[]) {
-        try {
-            console.log('🔵 Vectorize v2 insert called:', {
-                pointsCount: points.length,
-                indexName: this.indexName,
-            });
+    async insert(vectors: VectorInsert[]): Promise<string[]> {
+        console.log('🔵 Vectorize v2 insert called:', {
+            pointsCount: vectors.length,
+            indexName: this.indexName,
+        });
 
-            // FIXED: Use v2 API endpoint
-            const response = await fetch(
-                `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/insert`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        vectors: points.map(point => ({
-                            id: point.id,
-                            values: point.values,
-                            metadata: point.metadata,
-                        })),
-                    }),
-                }
-            );
-
-            console.log('📥 Vectorize insert response:', response.status, response.statusText);
-
-            if (!response.ok) {
-                const error = await response.text();
-                console.error('❌ Vectorize insert failed:', error);
-                throw new Error(`Vectorize insert failed: ${response.statusText} - ${error}`);
+        const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/insert`,
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ vectors }),
             }
+        );
 
-            const result = await response.json();
-            console.log('✅ Vectorize insert successful');
-            return result;
-        } catch (error) {
-            console.error('❌ Error inserting vectors:', error);
-            throw error;
+        console.log('📥 Vectorize insert response:', response.status, response.statusText);
+
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('❌ Vectorize insert failed:', error);
+            throw new Error(`Vectorize insert failed: ${response.statusText} - ${error}`);
         }
+
+        const result = await response.json();
+        console.log('✅ Vectorize insert successful');
+
+        // Return the IDs of inserted vectors
+        return vectors.map(v => v.id);
     }
 
     async query(
         vector: number[],
-        options: {
+        options?: {
             topK?: number;
             filter?: Record<string, any>;
-            returnValues?: boolean;
             returnMetadata?: boolean;
-        } = {}
-    ): Promise<SearchResult[]> {
-        try {
-            // FIXED: Use v2 API endpoint
-            const response = await fetch(
-                `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/query`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        vector,
-                        topK: options.topK || 5,
-                        filter: options.filter,
-                        returnValues: options.returnValues ?? false,
-                        returnMetadata: options.returnMetadata ?? true,
-                    }),
-                }
-            );
-
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`Vectorize query failed: ${response.statusText} - ${error}`);
-            }
-
-            const data = await response.json();
-
-            return (data.result?.matches || []).map((match: any) => ({
-                id: match.id,
-                score: match.score,
-                metadata: match.metadata || {},
-            }));
-        } catch (error) {
-            console.error('Error querying vectors:', error);
-            throw error;
+            returnValues?: boolean;
         }
+    ): Promise<VectorMatch[]> {
+        const topK = options?.topK || 5;
+        const filter = options?.filter;
+        const returnMetadata = options?.returnMetadata !== false;
+        const returnValues = options?.returnValues || false;
+
+        console.log('🔵 Vectorize v2 query called:', {
+            vectorLength: vector.length,
+            topK,
+            hasFilter: !!filter,
+            indexName: this.indexName,
+        });
+
+        const body: any = {
+            vector,
+            topK,
+            returnMetadata,
+            returnValues,
+        };
+
+        if (filter) {
+            body.filter = filter;
+        }
+
+        const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/query`,
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+            }
+        );
+
+        console.log('📥 Vectorize query response:', response.status, response.statusText);
+
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('❌ Vectorize query failed:', error);
+            throw new Error(`Vectorize query failed: ${response.statusText} - ${error}`);
+        }
+
+        const result = await response.json();
+        const matches: VectorMatch[] = result.result?.matches || [];
+
+        console.log('✅ Vectorize query successful:', { matches: matches.length });
+
+        return matches;
     }
 
-    async getById(ids: string[]): Promise<VectorPoint[]> {
-        try {
-            // FIXED: Use v2 API endpoint
-            const response = await fetch(
-                `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/getByIds`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ ids }),
-                }
-            );
+    async delete(ids: string[]): Promise<void> {
+        console.log('🔵 Vectorize delete called:', { idsCount: ids.length });
 
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`Vectorize getById failed: ${response.statusText} - ${error}`);
+        const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/delete-by-ids`,
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ids }),
             }
+        );
 
-            const data = await response.json();
-            return data.result?.vectors || [];
-        } catch (error) {
-            console.error('Error getting vectors by ID:', error);
-            throw error;
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('❌ Vectorize delete failed:', error);
+            throw new Error(`Vectorize delete failed: ${response.statusText} - ${error}`);
         }
+
+        console.log('✅ Vectorize delete successful');
     }
 
-    async deleteById(ids: string[]) {
-        try {
-            // FIXED: Use v2 API endpoint
-            const response = await fetch(
-                `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/deleteByIds`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ ids }),
-                }
-            );
+    async getById(id: string): Promise<VectorMatch | null> {
+        console.log('🔵 Vectorize getById called:', { id });
 
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`Vectorize delete failed: ${response.statusText} - ${error}`);
+        const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}/get-by-ids`,
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ids: [id] }),
             }
+        );
 
-            return response.json();
-        } catch (error) {
-            console.error('Error deleting vectors:', error);
-            throw error;
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('❌ Vectorize getById failed:', error);
+            throw new Error(`Vectorize getById failed: ${response.statusText} - ${error}`);
         }
-    }
 
-    async getIndexInfo() {
-        try {
-            // FIXED: Use v2 API endpoint
-            const response = await fetch(
-                `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/vectorize/v2/indexes/${this.indexName}`,
-                {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                }
-            );
+        const result = await response.json();
+        const vectors = result.result?.vectors || [];
 
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`Vectorize info failed: ${response.statusText} - ${error}`);
-            }
-
-            return response.json();
-        } catch (error) {
-            console.error('Error getting index info:', error);
-            throw error;
-        }
+        return vectors.length > 0 ? vectors[0] : null;
     }
 }
